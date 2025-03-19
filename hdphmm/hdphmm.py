@@ -1,10 +1,8 @@
 # !/usr/bin/env python
 
 import numpy as np
-import mdtraj as md
 import tqdm
 from scipy import sparse
-from scipy.stats import mode
 import matplotlib.pyplot as plt
 from matplotlib.collections import LineCollection
 from matplotlib.colors import ListedColormap, BoundaryNorm
@@ -31,8 +29,24 @@ class ModelError(Exception):
 
 
 class PhantomState:
-    """ An object that parameterizes the phantom state used to link independent trajectories
-    """
+    '''
+    An object that parameterizes the phantom state used to link independent trajectories
+
+    Parameters
+    ----------
+    d : int
+        Dimension of the trajectory
+    r : int
+        Order of the autoregressive observation model
+    length : int
+        Number of steps in trajectory, default=100
+    cov : np.ndarray
+        Covariance matrix for the state, should be of shape (1,d,d,1), default=None means zeros
+    A : np.ndarray
+        Autoregressive parameters, should be of shape (1,r,d,d,1), default=None means zeros
+    mu : np.ndarray
+        ??, should be of shape (1,d,1), default=None means zeros
+    '''
 
     def __init__(self, d, r, length=100, cov=None, A=None, mu=None):
 
@@ -58,6 +72,9 @@ class PhantomState:
         self.length = length
 
     def generate_trajectory(self):
+        '''
+        Generate a synthetic trajectory with phantom state parameters
+        '''
 
         traj_generator = gent.GenARData(params=self.params)
         traj_generator.gen_trajectory(self.length, 1)
@@ -67,157 +84,85 @@ class PhantomState:
 
 class InfiniteHMM:
 
-    def __init__(self, data, observation_model='AR', prior='MNIW-N', order=1, max_states=20, dim=None, save_com=True,
-                 load_com=False, gro=None, res='MET', difference=True, traj_no=None, radial=False,
-                 build_monomer='NAcarb11V', first_frame=0, link=False, parameterize_each=False, keep_xy=False,
-                 com_savename='com.pl', state_sequence=None, seed_sequence=None, save_every=1, **kwargs):
-        """
-        :param data: trajectories to analyze. If gro is not None, then this should be the name of a GROMACS trajectory \
-         file (.xtc or .trr) TODO: describe what goes in this data structure
-        :param observation_model: Model describing the observations (AR = autoregressive)
-        :param prior: prior (MNIW : Matrix Normal inverse Wishart produces)
-        :param order: for AR observation model, autoregressive order of data (order = 1 would be Y_t = phi*Y_{t-1} + c)
-        :param max_states: maximum number of states
-        :param dim: limit calculation to a specified dimension(s) given by integer indices or a list of integer indices
-        :param save_com: If True and you are loading a GROMACS trajectory, save the center of mass coordinates for \
-        quicker loading in future usage
-        :param load_com: load save center of mass trajectory. If True, you should be passing the pickled output from \
-        using the save_com option to data.
-        :param gro: GROMACS coordinate file
-        :param res: name of residue
-        :param difference: Take the first order difference of the timeseries
-        :param traj_no: If there are multiple trajectories, specify which of the trajectories to use
-        :param radial: replace the x and y coordinates of a MD trajectory with a radial coordinate with respect to
-        the pore centers of an HII phase lyotropic liquid crystal membrane.
-        :param build_monomer: name of monomer used to build membrane
-        :param first_frame: First frame of trajectory to analyze
-        :param link: link together multiple trajectories separated by a phantom state
-        :param parameterize_each: perform a separate parameterization for each independent trajectory
-        :param keep_xy: when parameterizing in terms of distance from pore center, keep radial coordinate in terms of \
-        xy.
-        :param com_savename: name by which to save center of mass trajectory if save_com is True
-        :param save_every: save parameter estimates every x number of frames
+    def __init__(self, data, observation_model='AR', prior='MNIW-N', order=1, max_states=20, dim=None, difference=True, 
+                 traj_no=None, link=False, state_sequence=None, seed_sequence=None, save_every=1, **kwargs):
+        '''
+        Primary HDP-AR-HMM class to store data and run all analysis.
 
-        :type data: str or object
-        :type observation_model: str
-        :type prior: str
-        :type order: int
-        :type max_states: int
-        :type dim: None, int or list of int
-        :type save_com: bool
-        :type load_com: bool
-        :type gro: str
-        :type res: str
-        :type traj_no: list or int
-        :type radial: bool
-        :type build_monomer: str
-        :type first_frame: int
-        :type link: bool
-        :type parameterize_each: bool
-        :type keep_xy: bool
-        :type com_savename: str
-        :type save_every: int
-        """
+        Parameters
+        ----------
+        data : tuple
+            Trajectories to analyze, should be a tuple of (np.ndarray, float) with the trajectories and the timestep (ps)
+        observation_model : str
+            Model describing the observations, currently autoregressive (AR) is only option, default='AR'
+        prior : str
+            Bayesian prior for the autoregressive parameters and noise, options are MNIW (Matrix Normal Inverse Wishart on 
+            A, Sigma, 0 on mu) and MNIW-N (MNIW on A, Sigma, normal on mu), default='MNIW-N'
+        order : int
+            Order for the autoregressive observation model, `order` = 1 would be Y_t = phi*Y_{t-1} + c, default=1
+        max_states : int
+            Maximum number of states allowed, default=20
+        dim : int, list
+            Limit calculation to a specified dimension(s) given by integer index or a list of integer indices, default=None         
+        difference : bool
+            Take the first order differene of the timeseries, i.e. x0 = x1 - x0, x1 = x2 - x1, etc., default=True
+        traj_no : int, list
+            Specify which trajectories to use, should be integer index or list of integer indices, default=None uses all 
+            trajectories in `data`
+        link : bool
+            If True, link together multiple trajectories separated by a phantom state, default=False
+        com_savename : str
+            Name by which to save center of mass trajectory if `save_com` is True
+        state_sequence : ?
+            ?, default=None
+        seed_sequence : ?
+            ?, default=None
+        save_every : int
+            Save parameter estimates every x number of frames, default=1
 
+        '''
+
+        ####################### READ IN INPUTS #######################
         self.observation_model = observation_model  # type of model (AR is the only option currently)
-        self.prior = prior  # prior for noise and autoregressive parameters (MNIW is only option currently)
+        self.prior = prior  # prior for noise and autoregressive parameters
         self.order = order  # autoregressive order
         self.max_states = max_states  # truncate infinte states possiblites down to something finite
         self.iter = 0  # iteration counter
         self.save_every = save_every
-        self.res = res
-
-        self.fix_state_sequence = False
-        if state_sequence is not None:
-            self.fix_state_sequence = True
-
         self.seed_sequence = seed_sequence
 
-        com = None
-        if load_com:
-            com = file_rw.load_object(data)
-            print('Loaded center-of-mass coordinates')
+        if state_sequence is not None:
+            self.fix_state_sequence = True
+        else:
+            self.fix_state_sequence = False
 
+        ####################### HANDLE TRAJECTORY DATA #######################
         if isinstance(data, tuple):
             com = data
+        else:
+            raise TypeError('`data` argument should be a tuple with a np.ndarray of trajectories and the timestep')
 
         if isinstance(dim, int):  # this takes care of array shape issues
             dim = [dim]
 
         self.labels = None
         self.actual_T = None
-        if isinstance(com, tuple) or gro is not None:
+        self.com = com[0]
+        self.dt = com[1]  # time step in picoseconds
 
-            if com is None:
+        if difference:  # take first order difference
+            self.trajectories = self.com[1:, ...] - self.com[:-1, ...]
+            print('Took first order difference of center of mass trajectories')
+        else:
+            self.trajectories = self.com[..., dim]
 
-                # print("Loading GROMACS trajectory file %s..." % data, end='', flush=True)
-                # t = md.load(data, top=gro)[first_frame:]
-                # print("Done!")
-                #
-                # residue = physical_properties.Residue(res)  # get residue attributes
-                #
-                # ndx = [a.index for a in t.topology.atoms if a.residue.name == res]  # index of all residue atoms
-                # names = [a.name for a in t.topology.atoms if a.residue.name == res][
-                #         :residue.natoms]  # names of atoms in one residue
-                # mass = [residue.mass[x] for x in names]  # mass of atoms in order that they appear in file
-                # print('Calculating center of mass trajectories of residue %s' % residue.name)
-                # self.com = physical_properties.center_of_mass(t.xyz[:, ndx, :], mass)  # determine center of mass trajectories
-                t = None
-                com = file_rw.load_object('trajectories/com_%s.pl' % res)
-                self.com = com[0]
+        # if isinstance(data, object): # gent.GenARData TODO: handle synthetic data input
+        #     self.trajectories = data.traj
+        #     self.labels = data.state_sequence
+        #     self.actual_T = data.T
+        #     self.dt = 1
 
-                if radial:
-
-                    try:
-                        sp = kwargs['spline_params']
-                    except KeyError:
-                        sp = {'npts_spline': 10, 'save': True, 'savename': 'spline.pl'}
-
-                    #monomer = physical_properties.Residue(build_monomer)  # properties of monomer used to build system
-                    monomer = None
-                    radial_distances = self._get_radial_distances(t, monomer, sp, keep_xy=keep_xy)
-
-                    if keep_xy:
-                        self.com = np.concatenate((radial_distances, self.com[..., 2][..., np.newaxis]), 2)
-                    else:
-                        self.com = np.concatenate(
-                            (radial_distances[..., np.newaxis], self.com[..., 2][..., np.newaxis]), 2)
-
-                #self.dt = t.time[1] - t.time[0]
-                self.dt = com[1]
-
-                if save_com:
-                    file_rw.save_object((self.com, self.dt), com_savename)
-                    print('Saved center-of-mass coordinates')
-
-            else:
-
-                self.com = com[0]
-                self.dt = com[1]  # time step in picoseconds
-
-                if radial and keep_xy:
-                    if self.com.shape[-1] != 3:
-                        raise Exception('I am assuming you are working in 3 dimensions. You say you want to keep the xy'
-                                        'coordinates but only gave a 2 dimensional center of mass array.')
-
-            if difference:  # take first order difference
-                self.trajectories = self.com[1:, ...] - self.com[:-1, ...]
-                #self.trajectories = self.trajectories[:, np.newaxis, :]
-                print('Took first order difference of center of mass trajectories')
-            else:
-                self.trajectories = self.com[..., dim]
-
-        elif isinstance(data, object):#gent.GenARData):
-
-            self.trajectories = data.traj
-            # import scipy.io as io
-            # io.savemat('test_traj.mat', dict(traj=self.trajectories))
-            self.labels = data.state_sequence
-
-            self.actual_T = data.T
-
-            self.dt = 1
-
+        # only use the selected trajectories
         if traj_no is not None:
 
             if isinstance(traj_no, int):
@@ -226,6 +171,7 @@ class InfiniteHMM:
             self.trajectories = self.trajectories[:, traj_no, :]
             self.com = self.com[:, traj_no, :]
 
+        ####################### SET UP LINKED TRAJECTORIES #######################
         if link:
 
             # currently only uses defaults. Can add functionality to allow new params
@@ -242,11 +188,10 @@ class InfiniteHMM:
             self.trajectories = linked_traj
             self.com = linked_com
 
-        # determine data characteristics
-        self.dimensions = self.trajectories.shape[2]
-        self.nT = self.trajectories.shape[0]
-        self.nsolute = self.trajectories.shape[1]
-
+        ####################### DETERMINE DATA CHARACTERISTICS #######################
+        self.dimensions = self.trajectories.shape[2] # dimension of trajectories
+        self.nT = self.trajectories.shape[0] # number of timesteps
+        self.nsolute = self.trajectories.shape[1] # number of trajectories
         print('Fitting %d %d dimensional trajectories assuming an autoregressive order of %d' %
               (self.nsolute, self.dimensions, order))
 
@@ -255,59 +200,48 @@ class InfiniteHMM:
         self.Ks = 1  # truncation level for mode transition distribution
         self.m = self.dimensions * self.order
 
+        ####################### INITIALIZE PRIOR DISTRIBUTION #######################
         self.prior_params = {}
         # MNIW-N: inverse Wishart on(A, Sigma) and normal on mu
         # MNIW: matrix normal inverse Wishart on (A, Sigma) with mean forced to 0
         if self.prior == 'MNIW':  # Matrix-normal inverse-wishart prior. Mean forced to zero
-
             self.prior_params['M'] = np.zeros([self.dimensions, self.m])
             self.prior_params['K'] = K[:self.m, :self.m]
 
         elif self.prior == 'MNIW-N':
-
             self.prior_params['M'] = np.zeros([self.dimensions, self.m])
             self.prior_params['K'] = K[:self.m, :self.m]
 
-            if traj_no is None:
-
+            if traj_no is None: # use all trajectories
                 traj_no = np.arange(self.nsolute)
 
-            if len(traj_no) > 1:
+            if len(traj_no) > 1: # if there are multiple trajectories, subtract off the mean and initialize sig0 with standard deviation
 
                 for i in range(len(traj_no)):
-                    self.trajectories[:, i, :] -= self.trajectories.mean(axis=0)[i, :]  # np.zeros(self.dimensions)
+                    self.trajectories[:, i, :] -= self.trajectories.mean(axis=0)[i, :]
 
                 self.prior_params['mu0'] = np.zeros([self.dimensions])
-
                 self.sig0 = np.zeros(self.dimensions)
                 for i in range(self.dimensions):
                     self.sig0[i] = self.trajectories[..., i].flatten().std()
 
-            else:
+            else: # if only one set mu0 to the mean and sig0 to (max-mean)/2
 
                 minmax = np.array([self.trajectories[:, 0, :].min(axis=0), self.trajectories[:, 0, :].max(axis=0)])
-
                 self.prior_params['mu0'] = minmax.mean(axis=0)
                 self.sig0 = (minmax[1, :] - self.prior_params['mu0']) / 2
-
-                # self.prior_params['mu0'] = self.trajectories[:, 0, :].mean(axis=0)
-                # self.sig0 = (self.trajectories[:, 0, :] - self.prior_params['mu0']).std(axis=0)  # * 2
-
-                print(self.sig0)
-                print(self.prior_params['mu0'])
 
             self.prior_params['cholSigma0'] = np.linalg.cholesky(self.sig0 * np.eye(self.dimensions))
             self.prior_params['numIter'] = 50
 
         else:
-
             raise PriorError('The prior %s is not implemented' % self.prior)
 
         # stuff to do with prior
         self.prior_params['nu'] = self.dimensions + 2  # degrees of freedom.
         self.prior_params['nu_delta'] = (self.prior_params['nu'] - self.dimensions - 1) * self.meanSigma
 
-        # sticky HDP-HMM hyperparameter settings
+        ####################### STICKY HDP-HMM HYPERPARAMETERS #######################
         self.a_alpha = 1
         self.b_alpha = 0.01
         self.a_gamma = 50  # global expected # of HMM states (affects \beta) -- TODO: play with this
@@ -324,6 +258,7 @@ class InfiniteHMM:
             if kwargs['hyperparams'] is not None:
                 self._override_hyperparameters(kwargs['hyperparams'])
 
+        ####################### INITIALIZE DATA STRUCTURES FOR SAMPLING #######################
         # things that initializeStructs.m does #
         if self.observation_model == 'AR':
 
@@ -387,8 +322,8 @@ class InfiniteHMM:
         if self.seed_sequence is not None:
             self.z = self.seed_sequence
 
+        ####################### PREPARE CONVERGENCE TRACKER #######################
         self.iteration = 0
-
         self.convergence = dict()
         self.convergence['A'] = []
         self.convergence['invSigma'] = []
@@ -401,10 +336,10 @@ class InfiniteHMM:
         self.found_states = None
         self.clustered_state_sequence = None
         self.clustered_parameters = None
-
         self.converged_params = dict()
 
     def _override_hyperparameters(self, hyperparams):
+        '''Overide the default hyperparameters with user-defined parameters'''
 
         if 'mu0' in hyperparams:
             print('mu0 adjust from ', self.prior_params['mu0'], end='')
@@ -425,74 +360,10 @@ class InfiniteHMM:
                 self.prior_params['cholSigma0'] = np.linalg.cholesky(self.sig0 * np.eye(self.dimensions))
                 print(' to ', self.sig0)
 
-    def _get_radial_distances(self, t, monomer, spline_params, keep_xy=False):
-
-        # pore_atoms = [a.index for a in t.topology.atoms if a.name in monomer.pore_defining_atoms and
-        #               a.residue.name in monomer.residues]
-
-        # spline = physical_properties.trace_pores(t.xyz[:, pore_atoms, :], t.unitcell_vectors,
-        #               spline_params['npts_spline'], save=spline_params['save'], savename=spline_params['savename'])[0]
-        spline = physical_properties.trace_pores(None, None,
-                      spline_params['npts_spline'], save=spline_params['save'], savename=spline_params['savename'])[0]
-
-        # nres = self.com.shape[1]
-        # if keep_xy:
-        #     radial_distances = np.zeros([t.n_frames, nres, 2])
-        # else:
-        #     radial_distances = np.zeros([t.n_frames, nres])
-        # npores = spline.shape[1]
-        # for f in tqdm.tqdm(range(t.n_frames), unit=' Frames'):
-        #     d = np.zeros([npores, nres])
-        #     for p in range(npores):
-        #         print(physical_properties.radial_distance_spline(spline[f, p, ...], self.com[f, ...],
-        #                                                    t.unitcell_vectors[f, ...], keep_xy=keep_xy))
-        #         break
-        #
-        #         d[p, :] = physical_properties.radial_distance_spline(spline[f, p, ...], self.com[f, ...],
-        #                                                              t.unitcell_vectors[f, ...], keep_xy=keep_xy)
-        #
-        #     radial_distances[f, :] = d[np.argmin(d, axis=0), np.arange(nres)]
-
-        nframes = self.com.shape[0]
-        nres = self.com.shape[1]
-        npores = spline.shape[1]
-
-        if keep_xy:
-            radial_distances = np.zeros([nframes, npores, nres, 2])
-        else:
-            radial_distances = np.zeros([nframes, npores, nres])
-
-        unitcell_vectors = file_rw.load_object('trajectories/unitcell_com_%s.pl' % self.res)
-        ndx = np.zeros([nframes, nres])
-        for f in tqdm.tqdm(range(nframes), unit=' Frames'):
-
-            if keep_xy:
-                d = np.zeros([npores, nres, 2])
-            else:
-                d = np.zeros([npores, nres])
-
-            for p in range(npores):
-                d[p, ...] = physical_properties.radial_distance_spline(spline[f, p, ...], self.com[f, ...],
-                                                                       unitcell_vectors[f, ...], keep_xy=keep_xy)
-
-            if keep_xy:
-
-                r = np.zeros([npores, nres])
-                for p in range(npores):
-                    r[p, :] = np.linalg.norm(d[p, ...], axis=1)
-                ndx[f, :] = np.argmin(r, axis=0)
-                radial_distances[f, ...] = d
-            else:
-
-                ndx[f, :] = np.argmin(d, axis=0)
-                radial_distances[f, :] = d
-
-        modes = mode(ndx, axis=0)[0].astype(int)
-
-        return radial_distances[:, modes, np.arange(nres), ...][:, 0, ...]
 
     def make_design_matrix(self, observations):
-        """ Create an (order*d , T) matrix of shifted observations. For each order create a trajectory shifted an
+        '''
+        Create an (order*d , T) matrix of shifted observations. For each order create a trajectory shifted an
         additional time step to the right. Do this for each dimension.
 
         For example, given [[1, 2, 3, 4], [5, 6, 7, 8]] and an order of 2, we would expect an output matrix:
@@ -502,12 +373,17 @@ class InfiniteHMM:
         [0 0 1 2]
         [0 0 5 6]
 
-        :param observations: time series sequence of observations
+        Parameters
+        ----------
+        observations : np.ndarray
+            Time series sequence of observations, should be shape (number of observations, dimensions)
 
-        :type observations: np.ndarray (nobservation x dimension)
-
-        :return X: design matrix
-        """
+        Returns
+        -------
+        X : np.ndarray
+            Design matrix, shape (AR order*dimensions, number of timesteps)
+        
+        '''
 
         d = observations.shape[1]  # dimensions
         T = observations.shape[0]  # number of points in trajectory
@@ -522,8 +398,7 @@ class InfiniteHMM:
         return X[:, self.order:]
 
     def _sample_hyperparams_init(self):
-        """ Sample hyperparameters to start iterations. Reproduction of sample_hyperparams_init.m for AR case
-        """
+        '''Sample hyperparameters to start iterations. Reproduction of sample_hyperparams_init.m for AR case'''
 
         self.hyperparams['alpha0_p_kappa0'] = self.a_alpha / self.b_alpha  # Gj concentration parameter
         self.hyperparams['gamma0'] = self.a_gamma / self.b_gamma  # G0 concentration parameter
@@ -539,17 +414,13 @@ class InfiniteHMM:
             self.hyperparams['rho0'] = 0
 
     def _sample_hyperparams(self):
-        """ Sample concentration parameters that define the distribution on transition distributions and mixture weights
-        of the various model components.
-        """
+        '''Sample concentration parameters that define the distribution on transition distributions and mixture weights of the various model components.'''
 
         alpha0_p_kappa0 = self.hyperparams['alpha0_p_kappa0']
         sigma0 = self.hyperparams['sigma0']
 
-        N = self.stateCounts[
-            'N']  # N(i, j) = no. z_t = i to z_{t+1} = j transitions in z_{1:T}. N(Kz+1, i) = 1 for i = z_1
-        Ns = self.stateCounts[
-            'Ns']  # Ns(i, k) = no. of observations assigned to mixture component k in mode i (i.e. # s_t = k given z_t =i)
+        N = self.stateCounts['N']  # N(i, j) = no. z_t = i to z_{t+1} = j transitions in z_{1:T}. N(Kz+1, i) = 1 for i = z_1
+        Ns = self.stateCounts['Ns']  # Ns(i, k) = no. of observations assigned to mixture component k in mode i (i.e. # s_t = k given z_t =i)
         uniqueS = self.stateCounts['uniqueS']  # uniqueS(i) = sum_j Ns(i, j) = no of mixture components from HMM-state i
         M = self.stateCounts['M']  # M(i, j) = no. of tables in restaurant i serving dish k
         barM = self.stateCounts['barM']  # barM(i, j) = no. of tables in restaurant i considering dish k
@@ -1219,8 +1090,8 @@ class InfiniteHMM:
                         for x in range(self.dimensions):
                             equils = []
                             for r in range(self.order):
-                                equils.append(pymbar.timeseries.detectEquilibration(A[:, r, u, x, s])[0])
-                            equils.append(pymbar.timeseries.detectEquilibration(sigma[:, u, x, s])[0])
+                                equils.append(pymbar.timeseries.detect_equilibration(A[:, r, u, x, s])[0])
+                            equils.append(pymbar.timeseries.detect_equilibration(sigma[:, u, x, s])[0])
                             if max(equils) > equil:
                                 equil = max(equils)
 
@@ -1638,13 +1509,6 @@ def multicolored_line_collection(x, y, z, colors, lw=2):
     lc.set_linewidth(lw)
 
     return lc
-
-
-class ClusteredParameters:
-
-    def __init__(self, ihmm):
-
-        print('hello')
 
 
 def get_clustered_parameters(ihmm, clusters, order=1):

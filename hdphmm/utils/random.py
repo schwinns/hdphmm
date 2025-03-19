@@ -24,8 +24,7 @@ class DfError(Exception):
 
 
 def randombeta(a, b, size=1):
-    """ Generate random variates from beta distribution given shape parameters a, b
-    """
+    """ Generate random variates from beta distribution given shape parameters a, b"""
 
     X = np.zeros([size])
 
@@ -49,14 +48,7 @@ def randombetavariate(a, b):
             y = u2 ** (1 / b)
 
         return x / (x + y)
-
-    # This doesn't work
-    # elif isinstance(a, int) and isinstance(b, int):
-    #
-    #     u = sorted(np.random.uniform(size=(a + b + 1)))
-    #
-    #     return u[a - 1]
-
+    
 
 def randomexponential(a, size=1):
     """ Generate random variate from exponential distribution. Uses inverse CDF method
