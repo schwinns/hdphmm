@@ -1,0 +1,23 @@
+name: hdphmm
+channels:
+  - defaults
+dependencies:
+  - pip
+  - ruptures
+  - tqdm
+  - matplotlib
+  - pymbar
+  - mpmath
+  - statsmodels
+  - numpy
+  - mdtraj
+  - jupyterlab
+  - scikit-learn
+  - mamba
+  - mdanalysis
+  - scipy
+  - seaborn
+  - ca-certificates
+  - certifi
+  - openssl
+prefix: /home/nate/anaconda3/envs/hdphmm
