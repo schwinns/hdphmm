@@ -567,8 +567,6 @@ class InfiniteHMM:
                     # sample a matrix normal distribution to get AR parameter estimates
                     A[:, :, kz, ks] = self.sample_from_matrix_normal(SyxSxxInv, sqrtSigma, cholinvSxx)
 
-            #print(np.linalg.inv(invSigma[..., 0, 0]))
-            #print(A[..., 0, 0])
             self.theta['invSigma'] = invSigma
             self.theta['A'] = A
 
@@ -834,14 +832,20 @@ class InfiniteHMM:
         self.stateCounts['sum_w'] = sum_w
 
     def _compute_likelihood(self, solute_no):
-        """ compute the likelihood of each state at each point in the time series
+        '''
+        Compute the likelihood of each state at each point in the time series.
 
-        :param solute_no: solute number (trajectory number in self.trajectories)
+        Parameters
+        ----------
+        solute_no: int
+            Solute number (trajectory number in self.trajectories)
 
-        :type solute_no: int
+        Returns
+        -------
+        likelihood: np.ndarray
+            Likelihood of being in each state at each time point (max_states x ks x nsolute)
 
-        :return likelihood
-        """
+        '''
 
         if self.observation_model == 'AR':
 
@@ -1095,7 +1099,7 @@ class InfiniteHMM:
                             if max(equils) > equil:
                                 equil = max(equils)
 
-            self.converged_params = dict(A=A[equil:, ...], sigma=sigma[equil:, ...], T=T[equil:, ...],
+            self.converged_params = dict(A=A[equil:, ...], sigma=sigma[equil:, ...], T=T[equil:, ...], # only save parameters after "equilibrated"
                                          pi_init=pi_init[equil:, :])
 
             if self.prior == 'MNIW-N':
