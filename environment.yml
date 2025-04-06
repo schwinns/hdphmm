@@ -1,5 +1,6 @@
 name: hdphmm
 channels:
+  - conda-forge
   - defaults
 dependencies:
   - pip
