@@ -2,7 +2,7 @@
 
 import numpy as np
 import tqdm
-from scipy import sparse
+from scipy import sparse, stats
 import matplotlib.pyplot as plt
 from matplotlib.collections import LineCollection
 from matplotlib.colors import ListedColormap, BoundaryNorm
@@ -85,7 +85,7 @@ class PhantomState:
 class InfiniteHMM:
 
     def __init__(self, data, observation_model='AR', prior='MNIW-N', order=1, max_states=20, dim=None, difference=True, 
-                 traj_no=None, link=False, state_sequence=None, seed_sequence=None, save_every=1, **kwargs):
+                 traj_no=None, link=False, state_sequence=None, seed_sequence=None, save_every=1, isotropic=False, **kwargs):
         '''
         Primary HDP-AR-HMM class to store data and run all analysis.
 
@@ -97,7 +97,8 @@ class InfiniteHMM:
             Model describing the observations, currently autoregressive (AR) is only option, default='AR'
         prior : str
             Bayesian prior for the autoregressive parameters and noise, options are MNIW (Matrix Normal Inverse Wishart on 
-            A, Sigma, 0 on mu) and MNIW-N (MNIW on A, Sigma, normal on mu), default='MNIW-N'
+            A, Sigma, 0 on mu), MNIW-N (MNIW on A, Sigma, normal on mu), and NormIG (multivariate normal on A, inverse gamma
+            on Sigma), default='MNIW-N'
         order : int
             Order for the autoregressive observation model, `order` = 1 would be Y_t = phi*Y_{t-1} + c, default=1
         max_states : int
@@ -119,6 +120,8 @@ class InfiniteHMM:
             ?, default=None
         save_every : int
             Save parameter estimates every x number of frames, default=1
+        isotropic : bool
+            If True, assume isotropic motion in the autoregressive model, default=False
 
         '''
 
@@ -130,6 +133,11 @@ class InfiniteHMM:
         self.iter = 0  # iteration counter
         self.save_every = save_every
         self.seed_sequence = seed_sequence
+        self.isotropic = isotropic
+
+        if self.isotropic:
+            print('WARNING: isotropic model must use the normal inverse gamma prior, setting prior to NormIG')
+            self.prior = 'NormIG'
 
         if state_sequence is not None:
             self.fix_state_sequence = True
@@ -208,7 +216,7 @@ class InfiniteHMM:
             self.prior_params['M'] = np.zeros([self.dimensions, self.m])
             self.prior_params['K'] = K[:self.m, :self.m]
 
-        elif self.prior == 'MNIW-N':
+        elif self.prior == 'MNIW-N' or self.prior == 'NormIG': # NOTE should probably separate out NormIG prior
             self.prior_params['M'] = np.zeros([self.dimensions, self.m])
             self.prior_params['K'] = K[:self.m, :self.m]
 
@@ -337,6 +345,9 @@ class InfiniteHMM:
         self.clustered_state_sequence = None
         self.clustered_parameters = None
         self.converged_params = dict()
+
+        if self.prior == 'NormIG':
+            self._IG_params = {'alpha' : [], 'beta' : []}
 
     def _override_hyperparameters(self, hyperparams):
         '''Overide the default hyperparameters with user-defined parameters'''
@@ -659,6 +670,70 @@ class InfiniteHMM:
                 self.convergence['invSigma'].append(invSigma.copy())
                 self.convergence['mu'].append(mu.copy())
 
+
+    def _sample_theta_isotropic(self):
+        ''' Sample theta parameters assuming isotropic motion'''
+
+        nu = self.prior_params['nu']
+        nu_delta = self.prior_params['nu_delta']
+        store_card = self.Ustats['card']
+
+        invSigma = self.theta['invSigma']
+        A = self.theta['A']
+
+        store_XX = self.Ustats['XX']
+        store_YX = self.Ustats['YX']
+        store_YY = self.Ustats['YY']
+
+        K = self.prior_params['K']
+        M = self.prior_params['M']
+        MK = M @ K  # @ symbol does matrix multiplication
+
+        # for troubleshooting, track alpha and beta for InvGamma
+        alpha = np.zeros((self.max_states, self.Ks))
+        beta_v = np.zeros((3, self.max_states, self.Ks))
+
+        for kz in range(self.max_states):
+            for ks in range(self.Ks):
+
+                if store_card[kz, ks] > 0:
+
+                    S1 = np.zeros_like(store_XX[:, :, kz, ks])
+                    S2 = np.zeros(3)
+                    S3 = np.zeros_like(S1)
+
+                    for k in range(3):
+
+                        S1[k,k] = store_XX[k, k, kz, ks] + K[k,k]
+                        S2[k] = (store_YX[k, k, kz, ks] + MK[k,k]) / (store_XX[k, k, kz, ks] + K[k,k])
+                        S3[k,k] = ((store_YY[k, k, kz, ks] + MK[k,k]) * (store_XX[k, k, kz, ks] + K[k,k]) - (store_YX[k, k, kz, ks] + MK[k,k])**2) / (store_XX[k, k, kz, ks] + K[k,k])**2
+                    
+                else:
+                    
+                    S1 = K
+                    S2 = np.diag(M)
+                    S3 = np.zeros_like(S1)
+
+                # sample 3 inverse Gamma distributions for sigma
+                alpha[kz,ks] = (nu + 3 + store_card[kz,ks] - 1) / 2
+
+                for k in range(3):
+                    beta_v[k,kz,ks] = ((S3[k,k] + nu_delta[k,k]) / 2)
+                    invSigma[k, k, kz, ks] = stats.invgamma.rvs(a=alpha[kz,ks], scale=beta_v[k,kz,ks])
+
+                # sample a multivariate normal distribution to get AR parameter estimates
+                a = stats.multivariate_normal.rvs(mean=S2, cov=invSigma[:, :, kz, ks] @ S1)
+                A[:, :, kz, ks] = np.diag(a)
+
+        self.theta['invSigma'] = invSigma
+        self.theta['A'] = A
+
+        if self.iter % self.save_every == 0:
+            self.convergence['A'].append(A.copy())
+            self.convergence['invSigma'].append(invSigma.copy())
+            self._IG_params['alpha'].append(alpha)
+            self._IG_params['beta'].append(beta_v)
+
     def inference(self, niter):
         """ Sample z and s sequences given data and transition distributions
 
@@ -667,16 +742,18 @@ class InfiniteHMM:
         :type niter: int
         """
 
+        sample_theta = self._sample_theta_isotropic if self.isotropic else self._sample_theta
+
         self._sample_hyperparams_init()
         self._sample_distributions()
-        self._sample_theta()
+        sample_theta()
 
-        for _ in tqdm.tqdm(range(niter)):
+        for _ in tqdm.auto.tqdm(range(niter)):
             self._update_ustats(self._sample_zs())
             self._sample_tables()
             self.iteration += 1
             self._sample_distributions()
-            self._sample_theta()
+            sample_theta()
             self._sample_hyperparams()
             self.convergence['nstates'].append(len(np.unique(self.z)))
             self.iter += 1

@@ -9,7 +9,7 @@ import os
 import numpy as np
 import matplotlib.path as mplPath
 from hdphmm.utils import file_rw
-import mdtraj as md
+# import mdtraj as md
 import tqdm
 
 ions_mw = dict()

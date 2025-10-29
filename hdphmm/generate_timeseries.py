@@ -103,10 +103,9 @@ class GenARData:
             self.phis = params['A']
             self.cov = params['sigma']
             self.pi_init = params['pi_init']
-            self.dim = self.cov.shape[1]
-            self.order = self.phis.shape[1]
+            self.dim = self.cov.shape[0]
+            self.order = self.phis.shape[0]
             self.mu = params['mu']
-            #self.count_matrix = self._get_count_matrix(params['z'])
 
         else:
 
@@ -127,19 +126,19 @@ class GenARData:
 
             self.phis = np.zeros([self.nstates, order, dim, dim])
 
-            if phis is not None:
-                # only works for r = 1
-                for s in range(self.nstates):
-                    try:
-                        self.phis[s, 0, ...] = np.array(phis[s]).reshape(dim, dim)
-                    except IndexError:
-                        raise IndexError('You have not provided enough phi matrices for the number of requested states')
-            else:
-                # NOTE: for multidimensional case, off-diagonal terms in each phi coefficient matrix are set to zero.
-                # I'm not sure what the stabilty rules are for the multidimensional case
-                self.phis = np.zeros([1, order, dim, dim, self.nstates])
-                for s in range(self.nstates):
-                    self.phis[0, ..., s] = generate_ar_parameters(order, dim)
+            # if phis is not None:
+            #     # only works for r = 1
+            #     for s in range(self.nstates):
+            #         try:
+            #             self.phis[s, 0, ...] = np.array(phis[s]).reshape(dim, dim)
+            #         except IndexError:
+            #             raise IndexError('You have not provided enough phi matrices for the number of requested states')
+            # else:
+            #     # NOTE: for multidimensional case, off-diagonal terms in each phi coefficient matrix are set to zero.
+            #     # I'm not sure what the stabilty rules are for the multidimensional case
+            #     self.phis = np.zeros([1, order, dim, dim, self.nstates])
+            #     for s in range(self.nstates):
+            #         self.phis[0, ..., s] = generate_ar_parameters(order, dim)
 
             self.cov = np.zeros([self.nstates, dim, dim])
             if cov is None:
@@ -286,85 +285,6 @@ class GenARData:
             self.traj[:, i, :] = np.array(traj)[self.order:]
             self.traj[:, i, :] -= self.traj[0, i, :]
 
-    # def _gen_ar_hmm(self, ndraws, ntraj, bound_dimensions=None, progress=True):
-    #     """ Generate a mean-zero autoregressive timeseries based on the transition matrix and autoregressive parameters.
-    #     The timeseries is defined as:
-    #
-    #     yt = \sum_{n=1}^{r} phi_n * y_{t-n} + \epsilon_t
-    #
-    #     where r is autoregressive order and \epsilon_t is Gaussian white noise with state-dependent variance
-    #
-    #     :param ndraws: number of points to generate for timeseries
-    #     :param phis: autoregressive coefficients for each state (n_phis x n_states)
-    #
-    #     :type ndraws: int
-    #     :type phis: np.ndarray
-    #     """
-    #
-    #     self.state_sequence = np.zeros([ndraws, ntraj])
-    #     self.traj = np.zeros([ndraws + self.order, ntraj, self.dim])
-    #
-    #     for n in tqdm.tqdm(range(ntraj), disable=(not progress)):
-    #
-    #         mu = np.copy(self.mu)
-    #
-    #         if unbound_dimensions is not None:
-    #
-    #             sum_phi = np.zeros([self.nstates, self.dim, self.dim])
-    #             unconditional_mean = np.zeros([self.nstates, self.dim])
-    #
-    #             for s in range(self.nstates):
-    #                 sum_phi[s, ...] = np.eye(self.dim) - self.phis[s, ...].sum(axis=0)
-    #                 unconditional_mean[s, :] = np.linalg.inv(sum_phi[s, ...]) @ mu[s, ...]
-    #                 #print(unconditional_mean[s, :])  # , self.mu[param_set_no, ..., s])
-    #
-    #         state = np.random.choice(self.state_labels)  # choose initial state with uniform probability
-    #
-    #         for d in range(self.order, ndraws + self.order):
-    #             # choose state based on transition matrix
-    #
-    #             state = np.random.choice(self.state_labels, p=self.T[state, :])
-    #             self.state_sequence[d - self.order, n] = state  # actual state labels for future comparison
-    #
-    #             # calculate autoregressive terms'
-    #
-    #             self.traj[d, n, :] = sum([self.phis[state, i, ...] @ self.traj[d - (i + 1), n, :]
-    #                                       for i in range(self.order)])
-    #
-    #             # print(self.mu[param_set_no, ..., state])
-    #             if unbound_dimensions is not None:
-    #
-    #                 #mu_desired = np.copy(self.mu[param_set_no, ..., state])
-    #                 mu_desired = unconditional_mean[state, :]
-    #                 #print(mu_desired)
-    #                 if d == self.order:  # first iteration
-    #                     for i in range(self.dim):
-    #                         if i in unbound_dimensions:
-    #                             mu_desired[i] = 0  # This is just to make all trajectories start at 0
-    #                     # print(mu_desired)
-    #                     # make it so that the unconditional mean of the VAR process is at the location of last state seg
-    #                     mu[state, ...] = sum_phi[state, ...] @ mu_desired
-    #                     # print(self.mu[param_set_no, ..., state])
-    #
-    #                 elif state != self.state_sequence[d - self.order - 1, n]:  # only change mean when state switch occurs!
-    #
-    #                     for i in range(self.dim):
-    #                         if i in unbound_dimensions:
-    #                             mu_desired[i] = self.traj[d - 1, n, i]  # shift mean to location of last state segment
-    #
-    #                     # make it so that the unconditional mean of the VAR process is at the location of last state seg
-    #                     # print(mu_desired)
-    #                     # print('hi')
-    #                     mu[state, ...] = sum_phi[state, ...] @ mu_desired
-    #                     # print(self.mu[param_set_no, ..., state], self.traj[d - 1, n, i])
-    #                     # exit()
-    #             # print(np.linalg.inv(sum_phi[state, ...]) @ self.mu[param_set_no, ..., state])
-    #             # exit()
-    #             #print(self.mu[param_set_no, ..., state])
-    #             # add Gaussian noise by drawing from multivariate normal distribution
-    #             self.traj[d, n, :] += np.random.multivariate_normal(mu[state, ...], self.cov[state, ...])
-    #
-    #     self.traj = self.traj[self.order:, ...]
 
     def _gen_ar_hmm(self, ndraws, ntraj, bound_dimensions=None, progress=True, state_no=None, resample_T=False,
                     alpha=1):
@@ -395,7 +315,7 @@ class GenARData:
                 T = self._resample_T(alpha)
             else:
                 T = self.T
-            # print(np.diag(T)[:5])
+
             if state_no is None:
 
                 initial_state = np.random.choice(state_labels, p=self.pi_init)
@@ -428,150 +348,26 @@ class GenARData:
 
                 subtraj = np.zeros([nsteps + self.order, self.dim])
 
-                # if i > 0:
-                #     subtraj[:self.order, :] = self.traj[-self.order:, n, :] - mu
-
                 for d in range(self.order, nsteps + self.order):
-                    subtraj[d, :] = sum([self.phis[state, i, ...] @ subtraj[d - (i + 1), :] for i in range(self.order)])
-                    subtraj[d, :] += np.random.multivariate_normal(np.zeros([self.dim]), self.cov[state, ...])
+                    subtraj[d, :] = sum([self.phis[i, ..., state] @ subtraj[d - (i + 1), :] for i in range(self.order)])
+                    subtraj[d, :] += np.random.multivariate_normal(np.zeros([self.dim]), self.cov[..., state])
 
                 if bound_dimensions is not None:
                     mu[bound_dimensions] = self.mu[state, bound_dimensions]
 
                 subtraj += mu
-                # shift = subtraj[self.order, :] - self.traj[tot_steps, n, :]
-                # shift = np.zeros(self.dim)
-                # if i > 0:
-                #     shift = mu - self.traj[tot_steps, n, :]
-                # # else:
-                # #     shift = subtraj[self.order:, :].mean(axis=0) - self.traj[tot_steps, n, :]
-                #
-
-                #     shift[bound_dimensions] = subtraj[self.order:, bound_dimensions].mean(axis=0) \
-                #                               - self.mu[state, bound_dimensions]
-                #     #print(self.mu[state, bound_dimensions])
-                #
-                # segment = subtraj[self.order:, :] - shift
-                # print(tot_steps)
-                # self.traj[(tot_steps + self.order):(tot_steps + self.order + nsteps), n, :] = segment
                 self.traj[(tot_steps + self.order):(tot_steps + self.order + nsteps), n, :] = subtraj[self.order:]
 
                 tot_steps += nsteps
-                # if i > 0:
 
                 if i > 0:
-                    # self.hops.append(segment.mean(axis=0) - mu)
-                    self.hops.append(self.traj[(tot_steps + self.order - 1), n, :] - mu)  # check this
-                    # print(self.hops[-1])
-                    #print(self.hops[-1])
-                    # mu = segment.mean(axis=0)
-
-                # print(subtraj[:3])
-                # plt.plot([tot_steps - nsteps, tot_steps], [mu[1], mu[1]])
-                # plt.plot(self.traj[self.order:(tot_steps + self.order), n, 1])
-                # plt.show()
+                    self.hops.append(self.traj[(tot_steps + self.order - 1), n, :] - mu) 
 
                 mu = self.traj[(tot_steps + self.order - 1), n, :]
                 mu = np.zeros_like(mu)
 
         self.traj = self.traj[self.order:, ...]
         #self.traj -= self.traj[0, ...]
-
-    def _gen_ar_hmm2(self, ndraws, ntraj, bound_dimensions=None, progress=True, state_no=None, resample_T=False,
-                    alpha=1):
-        """ Generate a mean-zero autoregressive timeseries based on the transition matrix and autoregressive parameters.
-        The timeseries is defined as:
-
-        yt = \sum_{n=1}^{r} phi_n * y_{t-n} + \epsilon_t
-
-        where r is autoregressive order and \epsilon_t is Gaussian white noise with state-dependent variance
-
-        :param ndraws: number of points to generate for timeseries
-        :param phis: autoregressive coefficients for each state (n_phis x n_states)
-
-        :type ndraws: int
-        :type phis: np.ndarray
-        """
-        # print(self.mu.shape)
-        # exit()
-
-        self.state_sequence = np.zeros([ndraws, ntraj])
-        self.traj = np.zeros([ndraws + self.order, ntraj, self.dim])
-
-        state_labels = np.arange(self.nstates)
-
-        for n in tqdm.tqdm(range(ntraj), disable=(not progress)):
-
-            if resample_T:
-                T = self._resample_T(alpha)
-            else:
-                T = self.T
-            # print(np.diag(T)[:5])
-            if state_no is None:
-
-                initial_state = np.random.choice(state_labels, p=self.pi_init)
-
-                # draw state sequence
-                state_sequence = np.zeros([ndraws], dtype=int)
-                state_sequence[0] = initial_state
-                for d in range(1, ndraws):
-                    previous_state = state_sequence[d - 1]
-                    state_sequence[d] = np.random.choice(state_labels, p=T[previous_state, :])
-
-            else:
-
-                state_sequence = state_no * np.ones([ndraws], dtype=int)
-
-            switch_points = ts.switch_points(state_sequence)
-            states = state_sequence[switch_points[:-1]]
-
-            tot_steps = 0
-
-            mu = np.zeros(self.dim)
-            for i, sp in enumerate(switch_points[:-1]):
-
-                nsteps = switch_points[i + 1] - switch_points[i]
-                state = states[i]
-
-                self.dwells.append(nsteps)
-
-                subtraj = np.zeros([nsteps + self.order, self.dim])
-
-                # if i > 0:
-                #     subtraj[:self.order, :] = self.traj[-self.order:, n, :] - mu
-
-                for d in range(self.order, nsteps + self.order):
-                    subtraj[d, :] = sum(
-                        [self.phis[state, i, ...] @ subtraj[d - (i + 1), :] for i in range(self.order)])
-                    subtraj[d, :] += np.random.multivariate_normal(np.zeros([self.dim]), self.cov[state, ...])
-
-                shift = subtraj[self.order, :] - self.traj[tot_steps, n, :]
-
-                if bound_dimensions is not None:
-                    shift[bound_dimensions] = subtraj[self.order:, bound_dimensions].mean(axis=0) \
-                                              - self.mu[state, bound_dimensions]
-
-                segment = subtraj[self.order:, :] - shift
-                self.traj[(tot_steps + self.order):(tot_steps + self.order + nsteps), n, :] = segment
-
-                tot_steps += nsteps
-
-                if bound_dimensions is not None:
-                    mu[bound_dimensions] = self.mu[state, bound_dimensions]
-
-                if i > 0:
-                    self.hops.append(segment.mean(axis=0) - mu)
-                    #self.hops.append(self.traj[(tot_steps + self.order - 1), n, :] - mu)  # check this
-                    mu = segment.mean(axis=0)
-
-                # plt.plot([tot_steps - nsteps, tot_steps], [mu[1], mu[1]])
-                # plt.plot(self.traj[self.order:(tot_steps + self.order), n, 1])
-                # plt.show()
-
-                # mu = self.traj[(tot_steps + self.order - 1), n, :]
-
-        self.traj = self.traj[self.order:, ...]
-        # self.traj -= self.traj[0, ...]
 
     def _resample_T(self, alpha):
 
