@@ -714,15 +714,18 @@ class InfiniteHMM:
                     S2 = np.diag(M)
                     S3 = np.zeros_like(S1)
 
-                # sample 3 inverse Gamma distributions for sigma
-                alpha[kz,ks] = (nu + 3 + store_card[kz,ks] - 1) / 2
+                # sample inverse Wishart with diagonal matrices for sigma
+                sqrtSigma, sqrtinvSigma = random.randiwishart(S3 + nu_delta, nu + store_card[kz, ks])
+                invSigma[:, :, kz, ks] = sqrtinvSigma.T @ sqrtinvSigma
 
-                for k in range(3):
-                    beta_v[k,kz,ks] = ((S3[k,k] + nu_delta[k,k]) / 2)
-                    invSigma[k, k, kz, ks] = stats.invgamma.rvs(a=alpha[kz,ks], scale=beta_v[k,kz,ks])
-
-                # sample a multivariate normal distribution to get AR parameter estimates
+                # sample a "multidimensional" normal distribution to get AR parameter estimates
                 a = stats.multivariate_normal.rvs(mean=S2, cov=invSigma[:, :, kz, ks] @ S1)
+                print('Shape of the multivariate normal:', a.shape)
+                if a != np.diag(a):
+                    print(a)
+                    print(np.diag(a))
+                    raise ValueError("The sampled multivariate normal is not diagonal.")
+                
                 A[:, :, kz, ks] = np.diag(a)
 
         self.theta['invSigma'] = invSigma
