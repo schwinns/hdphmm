@@ -212,11 +212,12 @@ class InfiniteHMM:
         self.prior_params = {}
         # MNIW-N: inverse Wishart on(A, Sigma) and normal on mu
         # MNIW: matrix normal inverse Wishart on (A, Sigma) with mean forced to 0
+        # NormIG: normal on A and inverse gamma on Sigma
         if self.prior == 'MNIW':  # Matrix-normal inverse-wishart prior. Mean forced to zero
             self.prior_params['M'] = np.zeros([self.dimensions, self.m])
             self.prior_params['K'] = K[:self.m, :self.m]
 
-        elif self.prior == 'MNIW-N' or self.prior == 'NormIG': # NOTE should probably separate out NormIG prior
+        elif self.prior == 'MNIW-N':
             self.prior_params['M'] = np.zeros([self.dimensions, self.m])
             self.prior_params['K'] = K[:self.m, :self.m]
 
@@ -241,6 +242,15 @@ class InfiniteHMM:
 
             self.prior_params['cholSigma0'] = np.linalg.cholesky(self.sig0 * np.eye(self.dimensions))
             self.prior_params['numIter'] = 50
+
+        elif self.prior == 'NormIG':  # normal inverse gamma prior
+
+            # these are not actually used, but we need them for setting up data structures
+            self.prior_params['M'] = np.zeros([self.dimensions, self.m])
+            self.prior_params['K'] = K[:self.m, :self.m]
+            
+            self.prior_params['alpha0'] = np.ones(self.dimensions)  # shape parameter for inverse gamma on Sigma
+            self.prior_params['beta0'] = 0.25*np.ones(self.dimensions)  # scale parameter for inverse gamma on Sigma
 
         else:
             raise PriorError('The prior %s is not implemented' % self.prior)
@@ -346,8 +356,6 @@ class InfiniteHMM:
         self.clustered_parameters = None
         self.converged_params = dict()
 
-        if self.prior == 'NormIG':
-            self._IG_params = {'alpha' : [], 'beta' : []}
 
     def _override_hyperparameters(self, hyperparams):
         '''Overide the default hyperparameters with user-defined parameters'''
@@ -674,8 +682,6 @@ class InfiniteHMM:
     def _sample_theta_isotropic(self):
         ''' Sample theta parameters assuming isotropic motion'''
 
-        nu = self.prior_params['nu']
-        nu_delta = self.prior_params['nu_delta']
         store_card = self.Ustats['card']
 
         invSigma = self.theta['invSigma']
@@ -685,48 +691,45 @@ class InfiniteHMM:
         store_YX = self.Ustats['YX']
         store_YY = self.Ustats['YY']
 
-        K = self.prior_params['K']
-        M = self.prior_params['M']
-        MK = M @ K  # @ symbol does matrix multiplication
-
-        # for troubleshooting, track alpha and beta for InvGamma
-        alpha = np.zeros((self.max_states, self.Ks))
-        beta_v = np.zeros((3, self.max_states, self.Ks))
+        alpha0 = self.prior_params['alpha0']
+        beta0 = self.prior_params['beta0']
 
         for kz in range(self.max_states):
             for ks in range(self.Ks):
 
+                # print(f'\nSampling theta for state kz={kz} ks={ks}')
+
                 if store_card[kz, ks] > 0:
 
-                    S1 = np.zeros_like(store_XX[:, :, kz, ks])
-                    S2 = np.zeros(3)
-                    S3 = np.zeros_like(S1)
+                    S1 = np.zeros(self.dimensions)
+                    S2 = np.zeros(self.dimensions)
+                    S3 = np.zeros(self.dimensions)
 
-                    for k in range(3):
+                    for j in range(self.dimensions):
 
-                        S1[k,k] = store_XX[k, k, kz, ks] + K[k,k]
-                        S2[k] = (store_YX[k, k, kz, ks] + MK[k,k]) / (store_XX[k, k, kz, ks] + K[k,k])
-                        S3[k,k] = ((store_YY[k, k, kz, ks] + MK[k,k]) * (store_XX[k, k, kz, ks] + K[k,k]) - (store_YX[k, k, kz, ks] + MK[k,k])**2) / (store_XX[k, k, kz, ks] + K[k,k])**2
-                    
+                        S1[j] = store_XX[j, j, kz, ks] + 1
+                        S2[j] = store_YX[j, j, kz, ks] / S1[j]
+                        S3[j] = 2*store_YX[j, j, kz, ks]**2 + store_YY[j, j, kz, ks] / S1[j]
+
                 else:
                     
-                    S1 = K
-                    S2 = np.diag(M)
-                    S3 = np.zeros_like(S1)
+                    S1 = np.ones(self.dimensions) # prior distribution is Sigma so S1 would be = 1
+                    S2 = np.zeros(self.dimensions) # prior distribution is 0 mean
+                    S3 = np.zeros(self.dimensions) # prior distribution uses beta_0 so S3 would be = 0
 
-                # sample inverse Wishart with diagonal matrices for sigma
-                sqrtSigma, sqrtinvSigma = random.randiwishart(S3 + nu_delta, nu + store_card[kz, ks])
-                invSigma[:, :, kz, ks] = sqrtinvSigma.T @ sqrtinvSigma
+                # sampling 
+                for j in range(self.dimensions):
+                    # sample variance for each independent distribution
+                    alpha_n = alpha0[j] + store_card[kz, ks] / 2 + 1
+                    beta_n = beta0[j] + S3[j] / 2
+                    sig2 = stats.invgamma.rvs(a=alpha_n, scale=beta_n, size=1)
+                    invSigma[j, j, kz, ks] = 1 / sig2
 
-                # sample a "multidimensional" normal distribution to get AR parameter estimates
-                a = stats.multivariate_normal.rvs(mean=S2, cov=invSigma[:, :, kz, ks] @ S1)
-                print('Shape of the multivariate normal:', a.shape)
-                if a != np.diag(a):
-                    print(a)
-                    print(np.diag(a))
-                    raise ValueError("The sampled multivariate normal is not diagonal.")
-                
-                A[:, :, kz, ks] = np.diag(a)
+                    # sample normal distribution to get AR parameter estimates
+                    a = stats.norm.rvs(loc=S2[j], scale=np.sqrt(sig2) / S1[j], size=1)
+                    A[j, j, kz, ks] = a
+
+                    # print(f'j = {j}\talpha_n: {alpha_n}, beta_n: {beta_n}, sig2: {sig2}, a: {a}')
 
         self.theta['invSigma'] = invSigma
         self.theta['A'] = A
@@ -734,8 +737,6 @@ class InfiniteHMM:
         if self.iter % self.save_every == 0:
             self.convergence['A'].append(A.copy())
             self.convergence['invSigma'].append(invSigma.copy())
-            self._IG_params['alpha'].append(alpha)
-            self._IG_params['beta'].append(beta_v)
 
     def inference(self, niter):
         """ Sample z and s sequences given data and transition distributions
