@@ -213,6 +213,11 @@ class InfiniteHMM:
         # MNIW-N: inverse Wishart on(A, Sigma) and normal on mu
         # MNIW: matrix normal inverse Wishart on (A, Sigma) with mean forced to 0
         # NormIG: normal on A and inverse gamma on Sigma
+
+        # stuff to do with prior
+        self.prior_params['nu'] = self.dimensions + 2  # degrees of freedom.
+        self.prior_params['nu_delta'] = (self.prior_params['nu'] - self.dimensions - 1) * self.meanSigma
+
         if self.prior == 'MNIW':  # Matrix-normal inverse-wishart prior. Mean forced to zero
             self.prior_params['M'] = np.zeros([self.dimensions, self.m])
             self.prior_params['K'] = K[:self.m, :self.m]
@@ -249,15 +254,13 @@ class InfiniteHMM:
             self.prior_params['M'] = np.zeros([self.dimensions, self.m])
             self.prior_params['K'] = K[:self.m, :self.m]
             
-            self.prior_params['alpha0'] = np.ones(self.dimensions)  # shape parameter for inverse gamma on Sigma
-            self.prior_params['beta0'] = 0.25*np.ones(self.dimensions)  # scale parameter for inverse gamma on Sigma
+            self.prior_params['mu0'] = 0  # mean for normal on A
+            self.prior_params['lambda0'] = 1 # scale parameter for normal on A
+            self.prior_params['alpha0'] = self.dimensions*self.prior_params['nu'] / 2  # shape parameter for inverse gamma on Sigma
+            self.prior_params['beta0'] = self.prior_params['lambda0'] / 2  # scale parameter for inverse gamma on Sigma
 
         else:
             raise PriorError('The prior %s is not implemented' % self.prior)
-
-        # stuff to do with prior
-        self.prior_params['nu'] = self.dimensions + 2  # degrees of freedom.
-        self.prior_params['nu_delta'] = (self.prior_params['nu'] - self.dimensions - 1) * self.meanSigma
 
         ####################### STICKY HDP-HMM HYPERPARAMETERS #######################
         self.a_alpha = 1
@@ -297,7 +300,13 @@ class InfiniteHMM:
             sumy = np.zeros([dimu, self.max_states, self.Ks])
             sumx = np.zeros([dimX, self.max_states, self.Ks])
 
-            self.Ustats = dict(card=card, XX=xx, YX=yx, YY=yy, sumY=sumy, sumX=sumx)
+            # for isotropic
+            xtx = np.zeros([dimX, dimX, self.max_states, self.Ks])
+            xty = np.zeros([dimX, dimu, self.max_states, self.Ks])
+            yty = np.zeros([dimu, dimu, self.max_states, self.Ks])
+
+            self.Ustats = dict(card=card, XX=xx, YX=yx, YY=yy, sumY=sumy, sumX=sumx)#, 
+                            #    XtX=xtx, XtY=xty, YtY=yty)
 
             self.blockSize = np.ones([self.nsolute, self.nT - self.order], dtype=int)
             self.blockEnd = np.cumsum(self.blockSize, axis=1)
@@ -687,10 +696,16 @@ class InfiniteHMM:
         invSigma = self.theta['invSigma']
         A = self.theta['A']
 
+        # store_XtX = self.Ustats['XtX']
+        # store_XtY = self.Ustats['XtY']
+        # store_YtY = self.Ustats['YtY']
+
         store_XX = self.Ustats['XX']
         store_YX = self.Ustats['YX']
         store_YY = self.Ustats['YY']
 
+        mu0 = self.prior_params['mu0']
+        lambda0 = self.prior_params['lambda0']
         alpha0 = self.prior_params['alpha0']
         beta0 = self.prior_params['beta0']
 
@@ -701,35 +716,56 @@ class InfiniteHMM:
 
                 if store_card[kz, ks] > 0:
 
-                    S1 = np.zeros(self.dimensions)
-                    S2 = np.zeros(self.dimensions)
-                    S3 = np.zeros(self.dimensions)
+                    S1 = 0
+                    S2_A, S2_B = 0, 0
+                    S3_A, S3_B, S3_C, S3_D = 0, 0, 0, 0
+
+                    # S1 = sum(XtX + lambda0)
+                    # S2 = S2_A / S2_B, S2_A = sum(XtY + mu0*lambda0), S2_B = sum(XtX + lambda0)
+                    # S3 = S3_A*S3_B - S3_C**2 / S3_D**2, S3_A = sum(YtY + mu0*lambda0), S3_B = sum(XtX + lambda0), S3_C = sum(XtY + mu0*lambda0), S3_D = sum(XtX + lambda0)
 
                     for j in range(self.dimensions):
 
-                        S1[j] = store_XX[j, j, kz, ks] + 1
-                        S2[j] = store_YX[j, j, kz, ks] / S1[j]
-                        S3[j] = 2*store_YX[j, j, kz, ks]**2 + store_YY[j, j, kz, ks] / S1[j]
+                        # S1 += store_XtX[j, j, kz, ks] + lambda0
+
+                        # S2_A += store_XtY[j, j, kz, ks] + mu0 * lambda0
+                        # S2_B += store_XtX[j, j, kz, ks] + lambda0
+                        
+                        # S3_A += store_YtY[j, j, kz, ks] + mu0 * lambda0
+                        # S3_B += store_XtX[j, j, kz, ks] + lambda0
+                        # S3_C += store_XtY[j, j, kz, ks] + mu0 * lambda0
+                        # S3_D += store_XtX[j, j, kz, ks] + lambda0
+
+                        S1 += store_XX[j, j, kz, ks] + lambda0
+
+                        S2_A += store_YX[j, j, kz, ks] + mu0 * lambda0
+                        S2_B += store_XX[j, j, kz, ks] + lambda0
+                        
+                        S3_A += store_YY[j, j, kz, ks] + mu0 * lambda0
+                        S3_B += store_XX[j, j, kz, ks] + lambda0
+                        S3_C += store_YX[j, j, kz, ks] + mu0 * lambda0
+                        S3_D += store_XX[j, j, kz, ks] + lambda0
+
+                    S2 = S2_A / S2_B
+                    S3 = (S3_A * S3_B - S3_C**2) / S3_D**2
 
                 else:
                     
-                    S1 = np.ones(self.dimensions) # prior distribution is Sigma so S1 would be = 1
-                    S2 = np.zeros(self.dimensions) # prior distribution is 0 mean
-                    S3 = np.zeros(self.dimensions) # prior distribution uses beta_0 so S3 would be = 0
+                    S1 = lambda0 # prior distribution is Sigma with scale parameter so S1 would be = lambda0
+                    S2 = mu0 # prior distribution is mean mu0
+                    S3 = 0 # prior distribution uses beta_0 so S3 would be = 0
 
                 # sampling 
-                for j in range(self.dimensions):
-                    # sample variance for each independent distribution
-                    alpha_n = alpha0[j] + store_card[kz, ks] / 2 + 1
-                    beta_n = beta0[j] + S3[j] / 2
-                    sig2 = stats.invgamma.rvs(a=alpha_n, scale=beta_n, size=1)
-                    invSigma[j, j, kz, ks] = 1 / sig2
+                alpha_n = alpha0 + self.dimensions * store_card[kz, ks] / 2 # try without d-1 term
+                beta_n = beta0 + S3 / 2
+                sig2 = stats.invgamma.rvs(a=alpha_n, scale=beta_n, size=1)  # sample from inverse gamma
 
-                    # sample normal distribution to get AR parameter estimates
-                    a = stats.norm.rvs(loc=S2[j], scale=np.sqrt(sig2) / S1[j], size=1)
-                    A[j, j, kz, ks] = a
+                mu_n = S2
+                var_n = sig2 / S1
+                a = stats.norm.rvs(loc=mu_n, scale=np.sqrt(var_n), size=1)
 
-                    # print(f'j = {j}\talpha_n: {alpha_n}, beta_n: {beta_n}, sig2: {sig2}, a: {a}')
+                invSigma[:, :, kz, ks] = np.eye(self.dimensions) / sig2  # isotropic covariance
+                A[:, :, kz, ks] = np.eye(self.dimensions) * a
 
         self.theta['invSigma'] = invSigma
         self.theta['A'] = A
@@ -875,6 +911,11 @@ class InfiniteHMM:
             self.Ustats['sumY'] = np.zeros([dimu, self.max_states, self.Ks])
             self.Ustats['sumX'] = np.zeros([dimX, self.max_states, self.Ks])
 
+            # # new data matrices needed for isotropic case
+            # self.Ustats['XtX'] = np.zeros([dimX, dimX, self.max_states, self.Ks]) # Ybar transpose Ybar
+            # self.Ustats['XtY'] = np.zeros([dimX, dimu, self.max_states, self.Ks]) # Ybar transpose Y
+            # self.Ustats['YtY'] = np.zeros([dimu, dimu, self.max_states, self.Ks]) # Y transpose Y
+
             for i in range(self.nsolute):
 
                 u = self.trajectories[:, i, :].T
@@ -889,6 +930,10 @@ class InfiniteHMM:
                         self.Ustats['YY'][:, :, kz, ks] += u[:, obsInd] @ u[:, obsInd].T
                         self.Ustats['sumY'][:, kz, ks] += u[:, obsInd].sum(axis=1)
                         self.Ustats['sumX'][:, kz, ks] += X[:, obsInd].sum(axis=1)
+
+                        # self.Ustats['XtX'][:, :, kz, ks] += X[:, obsInd].T @ X[:, obsInd]
+                        # self.Ustats['XtY'][:, :, kz, ks] += X[:, obsInd].T @ u[:, obsInd]
+                        # self.Ustats['YtY'][:, :, kz, ks] += u[:, obsInd].T @ u[:, obsInd]
 
             self.Ustats['card'] = Ns
 
