@@ -719,9 +719,9 @@ class InfiniteHMM:
                    S2_B = np.trace(store_XX[:, :, kz, ks] + lambda0)
                    S2 = S2_A / S2_B
 
-                   S3_A = np.trace(store_YY[:, :, kz, ks] + lambda0 * mu0)
+                   S3_A = np.trace(store_YY[:, :, kz, ks] + lambda0 * mu0**2)
                    S3_B = np.trace(store_XX[:, :, kz, ks] + lambda0)
-                   S3_C = np.trace(store_YX[:, :, kz, ks] + lambda0 * mu0**2)
+                   S3_C = np.trace(store_YX[:, :, kz, ks] + lambda0 * mu0)
                    S3 = (S3_A * S3_B - S3_C**2) / S3_B
 
                 else:
