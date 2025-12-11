@@ -358,6 +358,7 @@ class InfiniteHMM:
         self.convergence['kappa0'] = []
         self.convergence['gamma0'] = []
         self.convergence['nstates'] = []
+        self.convergence['state_sequence'] = []
         self.found_states = None
         self.clustered_state_sequence = None
         self.clustered_parameters = None
@@ -780,6 +781,7 @@ class InfiniteHMM:
             sample_theta()
             self._sample_hyperparams()
             self.convergence['nstates'].append(len(np.unique(self.z)))
+            self.convergence['state_sequence'].append(self.z.copy())
             self.iter += 1
 
     
