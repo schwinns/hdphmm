@@ -29,8 +29,8 @@ def converged_models(ihmm, nconverged, Ks=0):
             state_indices[state_idx] = list(zip(my_indices[0], my_indices[1]))
 
         # get state parameters
-        A = np.array(ihmm.convergence['A'])[iter, :, :, uniq_states, Ks]
-        invSigma = np.array(ihmm.convergence['invSigma'])[iter, :, :, uniq_states, Ks]
+        A = np.array(ihmm.convergence['A'])[iter, :, :, :, Ks]
+        invSigma = np.array(ihmm.convergence['invSigma'])[iter, :, :, :, Ks]
         
         # create temporary dataframe for this Gibbs iteration
         tmp = pd.DataFrame()
