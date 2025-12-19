@@ -163,7 +163,7 @@ class InfiniteHMM:
             self.trajectories = self.com[1:, ...] - self.com[:-1, ...]
             print('Took first order difference of center of mass trajectories')
         else:
-            self.trajectories = self.com[..., dim]
+            self.trajectories = self.com
 
         # if isinstance(data, object): # gent.GenARData TODO: handle synthetic data input
         #     self.trajectories = data.traj
